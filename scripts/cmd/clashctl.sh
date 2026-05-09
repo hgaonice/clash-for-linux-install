@@ -7,7 +7,7 @@ for lib_file in "$CLASHCTL_HOME"/scripts/lib/*.sh; do
 done
 
 for cmd_file in "$CLASHCTL_HOME"/scripts/cmd/*.sh; do
-    case "$cmd_file" in *clashctl*) continue ;; esac
+    case "$cmd_file" in *clashctl.*) continue ;; esac
     . "$cmd_file"
 done
 

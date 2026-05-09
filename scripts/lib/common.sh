@@ -34,10 +34,10 @@ _get_random_port() {
     while [ "$fail_count" -lt 100 ]; do
         local random_port
         random_port=$(shuf -i 1024-65535 -n 1)
-        if ! _is_port_used "$random_port"; then
+        ! _is_port_used "$random_port" && {
             printf '%s\n' "$random_port"
             return 0
-        fi
+        }
         fail_count=$((fail_count + 1))
     done
     _error_quit "未找到可用的代理端口"
@@ -88,13 +88,13 @@ _failcat() {
 }
 
 _error_quit() {
-    if [ $# -gt 0 ]; then
+    [ $# -gt 0 ] && {
         local color=#f92f60
         local emoji=📢
         [ $# -gt 1 ] && emoji=$1 && shift
         local msg="${emoji} $1"
         _color_log "$color" "$msg" >&2
-    fi
+    }
     exec $SHELL
 }
 
@@ -103,10 +103,10 @@ _set_env() {
     local value=$2
     local env_path="${CLASHCTL_HOME}/.env"
 
-    if grep -qE "^${key}=" "$env_path"; then
+    grep -qE "^${key}=" "$env_path" && {
         value=${value//&/\\&}
         sed -i "s|^${key}=.*|${key}=${value}|" "$env_path"
         return $?
-    fi
+    }
     printf '%s=%s\n' "$key" "$value" >>"$env_path"
 }

@@ -6,7 +6,7 @@ CLASHCTL_SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 valid_env
 parse_args "$@"
 
-_okcat "安装内核：$CLASHCTL_KERNEL by ${INIT_TYPE}"
+_okcat "安装内核：$CLASHCTL_KERNEL"
 _okcat '📦' "安装路径：$CLASHCTL_HOME"
 
 prepare_zip
@@ -23,4 +23,5 @@ clashsecret
 _valid_config "$CLASH_CONFIG_BASE" && {
     CLASHCTL_SUB_URL="file://$CLASH_CONFIG_BASE"
 }
-clashsub add --use "$CLASHCTL_SUB_URL"
+clashsub add --use "$CLASHCTL_SUB_URL" && clashon
+exec $SHELL

@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 
-SCRIPT_INIT_DIR="${CLASHCTL_SRC}/scripts/init"
+template_dir="${CLASHCTL_SRC}/scripts/init"
+template_openrc="${template_dir}/openrc.sh"
+template_runit="${template_dir}/runit.sh"
+template_systemd="${template_dir}/systemd.sh"
+template_sysvinit="${template_dir}/sysvinit.sh"
 
 service_manager=
 service_log_path=
 service_pid_path=
 
-detect_init() {
+detect_service_manager() {
     [ -z "$INIT_TYPE" ] && INIT_TYPE=$(readlink /proc/1/exe 2>/dev/null || echo "nohup")
     grep -qsE "docker|kubepods|containerd|podman|lxc" /proc/1/cgroup 2>/dev/null && INIT_TYPE='nohup'
     _is_root || INIT_TYPE='nohup'
     INIT_TYPE=$(basename "$INIT_TYPE")
-}
 
-detect_service_manager() {
-    detect_init
     case "$INIT_TYPE" in
     *systemd)
         service_manager="systemd"
@@ -176,10 +177,10 @@ service_log() {
         journalctl -u "$CLASHCTL_KERNEL" "$@"
         ;;
     *)
-        if [ $# -gt 0 ]; then
+        [ $# -gt 0 ] && {
             tail "$@" "$service_log_path"
             return
-        fi
+        }
         less "$service_log_path"
         ;;
     esac
@@ -220,19 +221,19 @@ install_service() {
 
     case "$service_manager" in
     systemd)
-        service_src="${SCRIPT_INIT_DIR}/systemd.sh"
+        service_src="$template_systemd"
         service_target="/etc/systemd/system/${CLASHCTL_KERNEL}.service"
         ;;
     sysvinit)
-        service_src="${SCRIPT_INIT_DIR}/sysvinit.sh"
+        service_src="$template_sysvinit"
         service_target="/etc/init.d/${CLASHCTL_KERNEL}"
         ;;
     openrc)
-        service_src="${SCRIPT_INIT_DIR}/openrc.sh"
+        service_src="$template_openrc"
         service_target="/etc/init.d/${CLASHCTL_KERNEL}"
         ;;
     runit)
-        service_src="${SCRIPT_INIT_DIR}/runit.sh"
+        service_src="$template_runit"
         service_target="/etc/sv/${CLASHCTL_KERNEL}/run"
         ;;
     nohup | *)
@@ -253,26 +254,86 @@ install_service() {
 
     case "$service_manager" in
     systemd)
-        systemctl daemon-reload
-        systemctl enable "$CLASHCTL_KERNEL" >&/dev/null && _okcat '🚀' '已设置开机自启'
+        systemctl daemon-reload || {
+            _failcat '❌' '重载 systemd 配置失败'
+            exit 1
+        }
+        _okcat '🧩' "已注册 systemd 服务：$CLASHCTL_KERNEL"
+        systemctl enable "$CLASHCTL_KERNEL" >/dev/null || {
+            _failcat '设置开机自启失败'
+            return 1
+        }
+        _okcat '🚀' '已设置开机自启'
         ;;
     sysvinit)
-        if command -v chkconfig >/dev/null 2>&1; then
-            chkconfig --add "$CLASHCTL_KERNEL"
-            chkconfig "$CLASHCTL_KERNEL" on >/dev/null && _okcat '🚀' '已设置开机自启'
-        elif command -v update-rc.d >/dev/null 2>&1; then
-            update-rc.d "$CLASHCTL_KERNEL" defaults
+        command -v chkconfig >&/dev/null && {
+            chkconfig --add "$CLASHCTL_KERNEL" >/dev/null || {
+                _failcat '❌' '注册 SysVinit 服务失败'
+                exit 1
+            }
+            _okcat '🧩' "已注册 SysVinit 服务：$CLASHCTL_KERNEL"
+
+            chkconfig "$CLASHCTL_KERNEL" on >/dev/null || {
+                _failcat '设置开机自启失败'
+                return 1
+            }
             _okcat '🚀' '已设置开机自启'
-        fi
+            return 0
+        }
+
+        command -v update-rc.d >&/dev/null && {
+            update-rc.d "$CLASHCTL_KERNEL" defaults >/dev/null || {
+                _failcat '❌' '注册 SysVinit 服务失败'
+                exit 1
+            }
+            _okcat '🧩' "已注册 SysVinit 服务：$CLASHCTL_KERNEL"
+
+            update-rc.d "$CLASHCTL_KERNEL" enable >/dev/null || {
+                _failcat '❌' '设置开机自启失败'
+                return 1
+            }
+            _okcat '🚀' '已设置开机自启'
+            return 0
+        }
+        _failcat '❌' '未找到 SysVinit 服务管理命令：chkconfig / update-rc.d'
+        exit 1
         ;;
     openrc)
-        rc-update add "$CLASHCTL_KERNEL" default >/dev/null && _okcat '🚀' '已设置开机自启'
-        ;;
-    runit)
-        mkdir -p "$(dirname "$service_target")"
-        mkdir -p "/etc/runit/runsvdir/default"
-        ln -snf "$(dirname "$service_target")" "/etc/runit/runsvdir/default/${CLASHCTL_KERNEL}"
+        rc-update add "$CLASHCTL_KERNEL" default >/dev/null || {
+            _failcat '❌' '设置开机自启失败'
+            return 1
+        }
+        _okcat '🧩' "已注册 OpenRC 服务：$CLASHCTL_KERNEL"
         _okcat '🚀' '已设置开机自启'
+        ;;
+
+    runit)
+        local service_dir
+        service_dir="$(dirname -- "$service_target")"
+
+        mkdir -p -- "$service_dir" || {
+            _failcat '❌' '创建 runit 服务目录失败'
+            return 1
+        }
+        _okcat '�' "已创建 runit 服务目录：$service_dir"
+
+        mkdir -p -- '/etc/runit/runsvdir/default' || {
+            _failcat '❌' '创建 runit 自启目录失败'
+            return 1
+        }
+
+        ln -snf -- "$service_dir" "/etc/runit/runsvdir/default/$CLASHCTL_KERNEL" || {
+            _failcat '❌' '设置开机自启失败'
+            return 1
+        }
+
+        _okcat '🧩' "已注册 runit 服务：$CLASHCTL_KERNEL"
+        _okcat '🚀' '已设置开机自启'
+        ;;
+
+    *)
+        _failcat '❌' "不支持的服务管理器：$service_manager"
+        return 1
         ;;
     esac
 }
@@ -283,8 +344,17 @@ uninstall_service() {
     case "$service_manager" in
     systemd)
         systemctl disable "$CLASHCTL_KERNEL" >&/dev/null
-        rm -f "/etc/systemd/system/${CLASHCTL_KERNEL}.service"
-        systemctl daemon-reload >&/dev/null
+        rm -f -- "/etc/systemd/system/${CLASHCTL_KERNEL}.service" || {
+            _failcat '❌' '移除 systemd 服务失败'
+            return 1
+        }
+        systemctl daemon-reload >/dev/null 2>&1 || {
+            _failcat '❌' '重载 systemd 配置失败'
+            return 1
+        }
+        systemctl reset-failed "$CLASHCTL_KERNEL" >&/dev/null
+
+        _okcat '🧹' "已注销 systemd 服务：$CLASHCTL_KERNEL"
         ;;
     sysvinit)
         if command -v chkconfig >/dev/null 2>&1; then

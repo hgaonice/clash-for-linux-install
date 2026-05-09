@@ -28,10 +28,10 @@ clashupgrade() {
     _okcat '⏳' "请求内核升级..."
 
     local follow_pid=
-    if [ "$log_flag" = true ]; then
+    [ "$log_flag" = true ] && {
         service_follow_log &
         follow_pid=$!
-    fi
+    }
 
     local res
     res=$(

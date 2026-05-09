@@ -219,10 +219,10 @@ _sub_update() {
 }
 
 _sub_log() {
-    if [ $# -gt 0 ]; then
+    [ $# -gt 0 ] && {
         tail "$@" "$CLASH_PROFILES_LOG"
         return
-    fi
+    }
     tail "$CLASH_PROFILES_LOG"
 }
 

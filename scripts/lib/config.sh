@@ -16,6 +16,40 @@ _get_bind_addr() {
   printf '%s\n' "$bind_addr"
 }
 
+_detect_proxy_port() {
+  local mixed_port http_port socks_port
+  mixed_port=$("$BIN_YQ" '.mixed-port // ""' "$CLASH_CONFIG_RUNTIME")
+  http_port=$("$BIN_YQ" '.port // ""' "$CLASH_CONFIG_RUNTIME")
+  socks_port=$("$BIN_YQ" '.socks-port // ""' "$CLASH_CONFIG_RUNTIME")
+
+  [ -z "$mixed_port" ] && [ -z "$http_port" ] && [ -z "$socks_port" ] && mixed_port=7890
+
+  local count=0
+  local service_active=false
+  service_is_active >&/dev/null && service_active=true
+
+  local entries=(
+    "mixed-port:$mixed_port"
+    "port:$http_port"
+    "socks-port:$socks_port"
+  )
+
+  local entry yaml_key port new_port
+  for entry in "${entries[@]}"; do
+    yaml_key=${entry%%:*}
+    port=${entry#*:}
+
+    [ -n "$port" ] && _is_port_used "$port" && [ "$service_active" != "true" ] && {
+      new_port=$(_get_random_port)
+      count=$((count + 1))
+      _failcat '🎯' "端口冲突：[$yaml_key] $port 🎲 随机分配 $new_port"
+      "$BIN_YQ" -i ".${yaml_key} = $new_port" "$CLASH_CONFIG_MIXIN"
+    }
+  done
+
+  [ "$count" -gt 0 ] && _merge_config
+}
+
 _detect_ext_addr() {
   local ext_addr
   ext_addr=$("$BIN_YQ" '.external-controller // ""' "$CLASH_CONFIG_RUNTIME")
@@ -27,7 +61,7 @@ _detect_ext_addr() {
   EXT_PORT=$ext_port
   [ "$ext_ip" = '0.0.0.0' ] && EXT_IP=$(_get_local_ip)
 
-  if _is_port_used "$EXT_PORT"; then
+  _is_port_used "$EXT_PORT" && {
     for pid in $(pgrep -f "$BIN_KERNEL"); do
       [ -z "$pid" ] && continue
       _is_port_used "$pid" && return 0
@@ -38,7 +72,7 @@ _detect_ext_addr() {
     EXT_PORT=$new_port
     "$BIN_YQ" -i ".external-controller = \"$ext_ip:$new_port\"" "$CLASH_CONFIG_MIXIN"
     _merge_config
-  fi
+  }
 }
 
 _get_secret() {
@@ -53,11 +87,11 @@ _valid_config() {
   test_cmd=("$BIN_KERNEL" -d "$(dirname "$config")" -f "$config" -t)
   test_log=$("${test_cmd[@]}") || {
     "${test_cmd[@]}"
-    if grep -qs "unsupport proxy type" <<<"$test_log"; then
+    grep -qs "unsupport proxy type" <<<"$test_log" && {
       local prefix="检测到订阅中包含不受支持的代理协议"
       [ "$CLASHCTL_KERNEL" = "clash" ] && _error_quit "${prefix}, 推荐安装使用 mihomo 内核"
       _error_quit "${prefix}, 请检查并升级内核版本"
-    fi
+    }
     return 1
   }
 }
@@ -83,16 +117,16 @@ _merge_config() {
       #               Rules                  #
       ########################################
       .rules = (
-        ($mixin.rules.prefix // []) +
+        ($mixin.rules.prepend // []) +
         ($config.rules // []) +
-        ($mixin.rules.suffix // [])
+        ($mixin.rules.append // [])
       ) |
 
       ########################################
       #                Proxies               #
       ########################################
       .proxies = (
-        ($mixin.proxies.prefix // []) +
+        ($mixin.proxies.prepend // []) +
         (
           ($config.proxies // []) as $configList |
           ($mixin.proxies.override // []) as $overrideList |
@@ -103,14 +137,14 @@ _merge_config() {
             ) // $configItem
           )
         ) +
-        ($mixin.proxies.suffix // [])
+        ($mixin.proxies.append // [])
       ) |
 
       ########################################
       #             ProxyGroups              #
       ########################################
       .proxy-groups = (
-        ($mixin.proxy-groups.prefix // []) +
+        ($mixin.proxy-groups.prepend // []) +
         (
           ($config.proxy-groups // []) as $configList |
           ($mixin.proxy-groups.override // []) as $overrideList |
@@ -121,7 +155,7 @@ _merge_config() {
             ) // $configItem
           )
         ) +
-        ($mixin.proxy-groups.suffix // [])
+        ($mixin.proxy-groups.append // [])
       ) |
 
       ########################################

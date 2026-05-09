@@ -12,7 +12,7 @@ ZIP_BASE_DIR="${ARCHIVE_BASE_DIR}"
 
 CLASHCTL_CMD_DIR="${CLASHCTL_HOME}/scripts/cmd"
 
-_valid_required() {
+valid_required() {
     local required_cmds=("xz" "pgrep" "curl" "tar" 'unzip')
     local missing=()
     for cmd in "${required_cmds[@]}"; do
@@ -22,7 +22,7 @@ _valid_required() {
 }
 
 valid_env() {
-    _valid_required
+    valid_required
 
     [ -d "$CLASHCTL_HOME" ] && {
         _error_quit "请先执行卸载脚本,以清除安装路径：$CLASHCTL_HOME"
@@ -220,14 +220,43 @@ detect_rc() {
 }
 apply_rc() {
     detect_rc
-    local source_clashctl=". $CLASHCTL_CMD_DIR/clashctl.sh"
-    echo "$source_clashctl" >>"$SHELL_RC_BASH"
-    echo "$source_clashctl" >>"$SHELL_RC_ZSH"
-    [ -n "$SHELL_RC_FISH" ] && /usr/bin/install "$CLASHCTL_CMD_DIR/clashctl.fish" "$SHELL_RC_FISH"
-    $source_clashctl
+
+    local source_clashctl=$(
+        cat <<EOF
+export CLASHCTL_HOME=$CLASHCTL_HOME
+. \$CLASHCTL_HOME/scripts/cmd/clashctl.sh
+EOF
+    )
+
+    local rc
+    for rc in "$SHELL_RC_BASH" "$SHELL_RC_ZSH"; do
+        [ ! -e "$rc" ] && continue
+
+        [ "$(tail -c 1 -- "$rc" | wc -l)" -eq 0 ] && {
+            printf '\n' >>"$rc"
+        }
+
+        printf '%s\n' "$source_clashctl" >>"$rc"
+
+        _okcat '📄' "已写入 source 配置：$rc"
+    done
+
+    [ -n "$SHELL_RC_FISH" ] && {
+        mkdir -p -- "$(dirname -- "$SHELL_RC_FISH")"
+        /usr/bin/install -m 0644 "$CLASHCTL_CMD_DIR/clashctl.fish" "$SHELL_RC_FISH"
+        _okcat '📄' "已写入 source 配置：$SHELL_RC_FISH"
+    }
+
+    . "$CLASHCTL_CMD_DIR"/clashctl.sh
 }
 revoke_rc() {
     detect_rc
-    sed -i --follow-symlinks "/$source_clashctl/d" "$SHELL_RC_BASH" "$SHELL_RC_ZSH" 2>/dev/null
-    [ -n "$SHELL_RC_FISH" ] && rm -f "$SHELL_RC_FISH" 2>/dev/null
+
+    local rc
+    for rc in "$SHELL_RC_BASH" "$SHELL_RC_ZSH"; do
+        [ ! -f "$rc" ] && continue
+        sed -i.bak --follow-symlinks '/CLASHCTL_HOME/d' "$rc" 2>/dev/null
+    done
+
+    [ -n "$SHELL_RC_FISH" ] && rm -f -- "$SHELL_RC_FISH" 2>/dev/null
 }
