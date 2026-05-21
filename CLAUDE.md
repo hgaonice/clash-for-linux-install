@@ -1,0 +1,61 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A pure Bash installer + CLI wrapper around the `mihomo` / `clash` proxy kernels for Linux. `install.sh` downloads/unpacks kernels, generates init-system service files, writes shell-rc hooks, and installs the `clashctl` function family. End users interact via `clashctl on|off|sub|ui|tun|mixin|secret|upgrade|...` (also exposed as `clashon`, `clashoff`, etc.).
+
+## Two execution contexts
+
+The same `scripts/lib/*.sh` files are sourced in two different contexts. When editing libs, both must keep working:
+
+1. **Install-time** (running `install.sh` / `uninstall.sh` from the repo): `CLASHCTL_SRC` is the repo root; `scripts/preflight.sh` sources `.env` and every `scripts/lib/*.sh`. Functions like `valid_env`, `prepare_zip`, `install_service`, `install_clashctl`, `apply_rc` only exist in this context.
+2. **Runtime** (after install, sourced from user's shell rc): `CLASHCTL_HOME` (default `~/clashctl`) is the install root; `scripts/cmd/clashctl.sh` sources `$CLASHCTL_HOME/.env`, every `scripts/lib/*.sh`, and every `scripts/cmd/*.sh` except itself. This defines the `clashctl` dispatcher plus `clashon`, `clashoff`, `clashsub`, ... as shell functions in the user's interactive shell.
+
+`install.sh` copies `scripts/cmd`, `scripts/lib`, `scripts/init`, and `resources/` into `$CLASHCTL_HOME` — it does NOT symlink. Changes to lib code only affect installed users after re-running the installer.
+
+## Config merge pipeline
+
+`resources/config.yaml` (the user's subscription) and `resources/mixin.yaml` (user overrides) are deep-merged into `resources/runtime.yaml` by `_merge_config` in `scripts/lib/config.sh`, using a yq expression that supports `prepend` / `append` / `override` semantics on `rules`, `proxies`, `proxy-groups`, plus `inject` for proxy-groups. The kernel is only ever started against `runtime.yaml`. After any change to mixin or the active subscription, `_merge_config_restart` re-merges, stops the kernel (escalating with sudo if Tun is active), and starts it again.
+
+`_valid_config` runs `mihomo/clash -t` against a config before accepting it. Subscription handling (`scripts/lib/convert.sh`) tries raw download first, then falls back to launching the bundled `subconverter` on a free port to convert non-clash formats.
+
+## Service manager abstraction
+
+`scripts/lib/service.sh` `detect_service_manager` inspects `/proc/1/exe` and cgroup info to pick one of `systemd | sysvinit | openrc | runit | nohup`. Container environments (docker/k8s/containerd/podman/lxc) and non-root users are forced to `nohup`. Every service operation (`service_start`, `service_stop`, `service_is_active`, `service_log`, `install_service`, `uninstall_service`) branches on `$service_manager`. Init templates live in `scripts/init/` and use `placeholder_*` tokens that `install_service` substitutes via `sed`.
+
+## Shell-rc integration
+
+`apply_rc` appends a `CLASHCTL_HOME` export + `clashctl.sh` source line to `~/.bashrc` and `~/.zshrc` (only if those files exist), and installs `clashctl.fish` into `~/.config/fish/conf.d/` (fish wraps the bash functions via `bash -i -c`). `revoke_rc` removes those lines on uninstall by matching `/CLASHCTL_HOME/d` with `sed -i.bak`.
+
+## Port-conflict handling
+
+Listening ports (mixed/http/socks/external-controller/subconverter) are checked via `_is_port_used` (ss → netstat fallback). On conflict, `_get_random_port` picks an unused port in 1024–65535 and writes the new value into `mixin.yaml` (or `pref.yml` for subconverter), then triggers a re-merge.
+
+## Conventions
+
+- Bash, target `/usr/bin/env bash`. `.editorconfig` is 2-space indent, LF endings.
+- ShellCheck config in `.shellcheckrc` disables SC1090, SC1091, SC2153, SC2155, SC2296 (don't add fixes for these globally).
+- User-facing output uses the `_okcat` / `_failcat` / `_errorcat` helpers in `scripts/lib/common.sh` — all messages are in Chinese with emoji prefixes. Match that style.
+- Functions intended as internal helpers are prefixed with `_` (e.g. `_merge_config`, `_get_secret`). Public CLI entry points are `clash<name>` (e.g. `clashon`, `clashsub`).
+- Use absolute paths for `cp`/`rm`/`install` (e.g. `/bin/cp`, `/usr/bin/rm`, `/usr/bin/install`) — the codebase does this deliberately to avoid alias interference in interactive shells.
+- `BIN_YQ` is the bundled yq (v4); use it rather than assuming a system yq. All yq invocations in this repo use go-yq v4 syntax.
+
+## Common commands
+
+```bash
+bash install.sh                  # install (optional args: mihomo|clash, or a subscription URL)
+bash install.sh mihomo <url>     # install with a specific kernel and subscription
+bash uninstall.sh                # remove $CLASHCTL_HOME, undo shell-rc edits, remove cron entry
+shellcheck scripts/**/*.sh *.sh  # lint (no test suite exists)
+```
+
+There is no automated test suite. To test changes that affect installed behavior, you generally need to run `bash install.sh` in a sandbox, exercise the relevant `clash*` command, then `bash uninstall.sh`. Avoid running these against your real `$CLASHCTL_HOME` while iterating.
+
+## Things easy to get wrong
+
+- `CLASHCTL_SRC` exists only at install/uninstall time. Don't reference it from `scripts/cmd/*.sh` or any code that runs at runtime — use `CLASHCTL_HOME` instead.
+- Editing files under `$CLASHCTL_HOME` does not update the repo, and vice versa. The two trees drift unless you re-install.
+- Never modify `runtime.yaml` directly — it's regenerated on every merge. Put overrides in `mixin.yaml`.
+- The `nohup` service path writes pid/log under `$CLASH_RESOURCES_DIR`, not `/run` or `/var/log`. Code that touches log/pid paths must call `detect_service_manager` first so `service_log_path` / `service_pid_path` are set correctly.

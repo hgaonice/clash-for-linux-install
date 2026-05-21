@@ -75,10 +75,11 @@ EOF
             break
             ;;
         -*)
-            _error_quit "未知选项：$1"
+            _errorcat "未知选项：$1"
+            return 1
             ;;
         *)
-            [ -n "$url" ] && _error_quit "仅支持一个订阅链接"
+            [ -n "$url" ] && { _errorcat "仅支持一个订阅链接"; return 1; }
             url=$1
             ;;
         esac
@@ -89,22 +90,25 @@ EOF
     [ -z "$url" ] && {
         printf '%s' "$(_okcat '✈️ ' '请输入要添加的订阅链接：')"
         read -r url
-        [ -z "$url" ] && _error_quit "订阅链接不能为空"
+        [ -z "$url" ] && { _errorcat "订阅链接不能为空"; return 1; }
     }
 
     local existing_id
-    existing_id=$(_get_id_by_url "$url") && _error_quit "该订阅链接已存在：[$existing_id] $url"
+    existing_id=$(_get_id_by_url "$url") && { _errorcat "该订阅链接已存在：[$existing_id] $url"; return 1; }
 
     _download_config "$CLASH_CONFIG_TEMP" "$url"
-    _valid_config "$CLASH_CONFIG_TEMP" || _error_quit "订阅无效，请检查：
+    _valid_config "$CLASH_CONFIG_TEMP" || {
+        _errorcat "订阅无效，请检查：
     原始订阅：${CLASH_CONFIG_TEMP}.raw
     转换订阅：$CLASH_CONFIG_TEMP
     转换日志：$BIN_SUBCONVERTER_LOG"
+        return 1
+    }
 
     local id
     id=$("$BIN_YQ" '.profiles // [] | (map(.id) | max) // 0 | . + 1' "$CLASH_PROFILES_META")
     local profile_path="${CLASH_PROFILES_DIR}/${id}.yaml"
-    mv "$CLASH_CONFIG_TEMP" "$profile_path"
+    /bin/mv "$CLASH_CONFIG_TEMP" "$profile_path"
 
     PROFILE_ID=$id PROFILE_PATH=$profile_path PROFILE_URL=$url \
         "$BIN_YQ" -i '
@@ -126,14 +130,14 @@ _sub_del() {
     [ -z "$id" ] && {
         printf '%s' "$(_okcat '✈️ ' '请输入要删除的订阅 id：')"
         read -r id
-        [ -z "$id" ] && _error_quit "订阅 id 不能为空"
+        [ -z "$id" ] && { _errorcat "订阅 id 不能为空"; return 1; }
     }
 
     local profile_path url use
-    profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
+    profile_path=$(_get_path_by_id "$id") || _errorcat "订阅 id 不存在，请检查" || return
     url=$(_get_url_by_id "$id")
     use=$("$BIN_YQ" '.use // "" | tostring' "$CLASH_PROFILES_META")
-    [ "$use" = "$id" ] && _error_quit "删除失败：订阅 $id 正在使用中，请先切换订阅"
+    [ "$use" = "$id" ] && { _errorcat "删除失败：订阅 $id 正在使用中，请先切换订阅"; return 1; }
 
     /usr/bin/rm -f "$profile_path"
     PROFILE_ID=$id "$BIN_YQ" -i 'del(.profiles[] | select((.id | tostring) == env(PROFILE_ID)))' "$CLASH_PROFILES_META"
@@ -146,19 +150,21 @@ _sub_list() {
 }
 
 _sub_use() {
-    "$BIN_YQ" -e '.profiles // [] | length == 0' "$CLASH_PROFILES_META" >/dev/null 2>&1 &&
-        _error_quit "当前无可用订阅，请先添加订阅"
+    "$BIN_YQ" -e '.profiles // [] | length == 0' "$CLASH_PROFILES_META" >/dev/null 2>&1 && {
+        _errorcat "当前无可用订阅，请先添加订阅"
+        return 1
+    }
 
     local id=$1
     [ -z "$id" ] && {
         _sub_list
         printf '%s' "$(_okcat '✈️ ' '请输入要使用的订阅 id：')"
         read -r id
-        [ -z "$id" ] && _error_quit "订阅 id 不能为空"
+        [ -z "$id" ] && { _errorcat "订阅 id 不能为空"; return 1; }
     }
 
     local profile_path url
-    profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
+    profile_path=$(_get_path_by_id "$id") || _errorcat "订阅 id 不存在，请检查" || return
     url=$(_get_url_by_id "$id")
 
     cat "$profile_path" >"$CLASH_CONFIG_BASE"
@@ -173,7 +179,7 @@ _sub_update() {
     for arg in "$@"; do
         case $arg in
         --auto)
-            command -v crontab >/dev/null || _error_quit "未检测到 crontab 命令，请先安装 cron 服务"
+            command -v crontab >/dev/null || _errorcat "未检测到 crontab 命令，请先安装 cron 服务" || return
             crontab -l 2>/dev/null | grep -Fqs "$CLASHCTL_CRON_TAG" || {
                 {
                     crontab -l 2>/dev/null | grep -Fv "$CLASHCTL_CRON_TAG"
@@ -193,7 +199,7 @@ _sub_update() {
     [ -z "$id" ] && id=$("$BIN_YQ" '.use // 1 | tostring' "$CLASH_PROFILES_META")
 
     local url profile_path use
-    url=$(_get_url_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
+    url=$(_get_url_by_id "$id") || _errorcat "订阅 id 不存在，请检查" || return
     profile_path=$(_get_path_by_id "$id")
     _okcat "✈️ " "更新订阅：[$id] $url"
 
@@ -205,10 +211,11 @@ _sub_update() {
 
     _valid_config "$CLASH_CONFIG_TEMP" || {
         _logging_sub "❌ 订阅更新失败：[$id] $url"
-        _error_quit "订阅无效：请检查：
+        _errorcat "订阅无效：请检查：
     原始订阅：${CLASH_CONFIG_TEMP}.raw
     转换订阅：$CLASH_CONFIG_TEMP
     转换日志：$BIN_SUBCONVERTER_LOG"
+        return 1
     }
 
     _logging_sub "✅ 订阅更新成功：[$id] $url"

@@ -12,51 +12,19 @@ for cmd_file in "$CLASHCTL_HOME"/scripts/cmd/*.sh; do
 done
 
 clashctl() {
-    local cmd
-    cmd=${1:-help}
+    local sub_cmd
+    sub_cmd=${1:-help}
     shift
 
-    case $cmd in
-    -h | --help | help)
-        clashhelp "$@"
-        ;;
-    on)
-        clashon "$@"
-        ;;
-    off)
-        clashoff "$@"
-        ;;
-    ui)
-        clashui "$@"
-        ;;
-    status)
-        clashstatus "$@"
-        ;;
-    log)
-        clashlog "$@"
-        ;;
-    proxy)
-        clashproxy "$@"
-        ;;
-    tun)
-        clashtun "$@"
-        ;;
-    mixin)
-        clashmixin "$@"
-        ;;
-    secret)
-        clashsecret "$@"
-        ;;
-    sub)
-        clashsub "$@"
-        ;;
-    upgrade)
-        clashupgrade "$@"
-        ;;
-    *)
-        _failcat "Unknown subcommand: $cmd"
-        _failcat "Use 'clashctl help' for usage information."
-        ;;
+    case $sub_cmd in
+    -h | --help | help) sub_cmd=help ;;
     esac
 
+    local target="clash${sub_cmd}"
+    declare -F "$target" >&/dev/null || {
+        _failcat "Unknown subcommand: $target"
+        _failcat "Use 'clashctl help' for usage information."
+        return
+    }
+    "$target" "$@"
 }

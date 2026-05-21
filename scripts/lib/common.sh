@@ -40,7 +40,7 @@ _get_random_port() {
         }
         fail_count=$((fail_count + 1))
     done
-    _error_quit "未找到可用的代理端口"
+    _errorcat "未找到可用的代理端口"
 }
 
 _get_local_ip() {
@@ -87,7 +87,7 @@ _failcat() {
     return 1
 }
 
-_error_quit() {
+_errorcat() {
     [ $# -gt 0 ] && {
         local color=#f92f60
         local emoji=📢
@@ -95,7 +95,7 @@ _error_quit() {
         local msg="${emoji} $1"
         _color_log "$color" "$msg" >&2
     }
-    exec $SHELL
+    return 1
 }
 
 _set_env() {
@@ -104,7 +104,9 @@ _set_env() {
     local env_path="${CLASHCTL_HOME}/.env"
 
     grep -qE "^${key}=" "$env_path" && {
+        value=${value//\\/\\\\}
         value=${value//&/\\&}
+        value=${value//|/\\|}
         sed -i "s|^${key}=.*|${key}=${value}|" "$env_path"
         return $?
     }

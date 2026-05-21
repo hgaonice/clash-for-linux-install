@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 . "$CLASHCTL_SRC/.env"
+. "$CLASHCTL_SRC/.env.install"
 
 for lib_file in "$CLASHCTL_SRC"/scripts/lib/*.sh; do
     [ -f "$lib_file" ] || continue
@@ -13,24 +14,29 @@ ZIP_BASE_DIR="${ARCHIVE_BASE_DIR}"
 CLASHCTL_CMD_DIR="${CLASHCTL_HOME}/scripts/cmd"
 
 valid_required() {
-    local required_cmds=("xz" "pgrep" "curl" "tar" 'unzip')
+    local required_cmds=("xz" "pgrep" "pkill" "curl" "tar" 'unzip' 'gzip' 'shuf')
     local missing=()
     for cmd in "${required_cmds[@]}"; do
         command -v "$cmd" >&/dev/null || missing+=("$cmd")
     done
-    [ "${#missing[@]}" -gt 0 ] && _error_quit "请先安装以下命令：${missing[*]}"
+
+    command -v ss >&/dev/null || command -v netstat >&/dev/null || missing+=("ss/netstat")
+    command -v ip >&/dev/null || command -v hostname >&/dev/null || missing+=("ip/hostname")
+
+    [ ${#missing[@]} -eq 0 ] || _errorcat "请先安装以下命令：${missing[*]}" || exit
 }
 
 valid_env() {
     valid_required
 
     [ -d "$CLASHCTL_HOME" ] && {
-        _error_quit "请先执行卸载脚本,以清除安装路径：$CLASHCTL_HOME"
+        _errorcat "请先执行卸载脚本,以清除安装路径：$CLASHCTL_HOME"
+        exit
     }
 
-    mkdir -p "$CLASHCTL_HOME" || {
-        _error_quit "${CLASHCTL_HOME}：当前路径不可用，请在 .env 中更换安装路径。"
-    }
+    local _d="$CLASHCTL_HOME"
+    while [[ ! -d "$_d" ]]; do _d="$(dirname "$_d")"; done
+    [[ -w "$_d" ]] || _errorcat "${CLASHCTL_HOME}：当前路径不可用，请在 .env.install 中更换安装路径。" || exit
 }
 
 parse_args() {
@@ -77,7 +83,6 @@ prepare_zip() {
     unzip_zip
 }
 load_zip() {
-    ZIP_UI="${CLASHCTL_SRC}/${ZIP_UI}"
     local matches=()
     shopt -s nullglob
     matches=("${ZIP_BASE_DIR}"/clash*)
@@ -90,10 +95,45 @@ load_zip() {
     ZIP_SUBCONVERTER="${matches[0]:-}"
     shopt -u nullglob
 }
+_fetch_latest_tag() {
+    local repo=$1
+    # 网络受限时此处会失败，由调用方提示用户在 .env.install 手动指定版本
+    local body
+    body=$(curl -sL --max-time 10 --retry 1 -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null) || return 1
+    local tag
+    tag=$(printf '%s' "$body" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 |
+        sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/')
+    [ -n "$tag" ] && printf '%s\n' "$tag"
+}
+
+_resolve_version() {
+    local varname=$1 repo=$2
+    [ -n "${!varname}" ] && return 0
+    local tag
+    tag=$(_fetch_latest_tag "$repo") || {
+        _errorcat "${repo} 版本获取失败，请在 .env.install 手动指定 $varname"
+        return 1
+    }
+    printf -v "$varname" '%s' "$tag"
+    _okcat '🏷️ ' "${repo} → $tag"
+}
+
 download_zip() {
     (($#)) || return 0
     local url_clash url_mihomo url_yq url_subconverter
     local arch=$(uname -m)
+
+    _okcat '🔎' "查询依赖最新版本..."
+    local item
+    for item in "$@"; do
+        case $item in
+        mihomo) _resolve_version VERSION_MIHOMO MetaCubeX/mihomo || exit ;;
+        yq) _resolve_version VERSION_YQ mikefarah/yq || exit ;;
+        subconverter) _resolve_version VERSION_SUBCONVERTER tindy2013/subconverter || exit ;;
+        esac
+    done
+
     case "$arch" in
     x86_64)
         local flags=$(grep -m1 '^flags' /proc/cpuinfo)
@@ -126,7 +166,7 @@ download_zip() {
         url_subconverter=https://github.com/tindy2013/subconverter/releases/download/${VERSION_SUBCONVERTER}/subconverter_aarch64.tar.gz
         ;;
     *)
-        _error_quit "未知的架构版本：$arch，请自行下载对应版本至 ${ZIP_BASE_DIR} 目录"
+        _errorcat "未知的架构版本：$arch，请自行下载对应版本至 ${ZIP_BASE_DIR} 目录" || exit
         ;;
     esac
 
@@ -151,6 +191,7 @@ download_zip() {
             --fail \
             --insecure \
             --location \
+            --max-time "$CLASHCTL_DOWNLOAD_TIMEOUT" \
             --retry 1 \
             --output "$target" \
             "$url"
@@ -166,7 +207,7 @@ valid_zip() {
         gzip -tq "$zip" || unzip -tqq "$zip" || fail_zips+=("$zip")
     done
 
-    ((${#fail_zips[@]})) && _error_quit "文件验证失败：${fail_zips[*]} 请删除后重试，或自行下载对应版本至 ${ZIP_BASE_DIR} 目录"
+    [ ${#fail_zips[@]} -eq 0 ] || _errorcat "文件验证失败：${fail_zips[*]} 请删除后重试，或自行下载对应版本至 ${ZIP_BASE_DIR} 目录" || exit
 }
 unzip_zip() {
     valid_zip "$ZIP_KERNEL" "$ZIP_YQ" "$ZIP_SUBCONVERTER" "$ZIP_UI"
@@ -228,7 +269,7 @@ export CLASHCTL_HOME=$CLASHCTL_HOME
 EOF
     )
 
-    local rc
+    local rc written=()
     for rc in "$SHELL_RC_BASH" "$SHELL_RC_ZSH"; do
         [ ! -e "$rc" ] && continue
 
@@ -238,15 +279,16 @@ EOF
 
         printf '%s\n' "$source_clashctl" >>"$rc"
 
-        _okcat '📄' "已写入 source 配置：$rc"
+        written+=("$rc")
     done
 
     [ -n "$SHELL_RC_FISH" ] && {
         mkdir -p -- "$(dirname -- "$SHELL_RC_FISH")"
         /usr/bin/install -m 0644 "$CLASHCTL_CMD_DIR/clashctl.fish" "$SHELL_RC_FISH"
-        _okcat '📄' "已写入 source 配置：$SHELL_RC_FISH"
+        written+=("$SHELL_RC_FISH")
     }
 
+    [ ${#written[@]} -gt 0 ] && _okcat '📄' "已写入 shell 配置：${written[*]}"
     . "$CLASHCTL_CMD_DIR"/clashctl.sh
 }
 revoke_rc() {

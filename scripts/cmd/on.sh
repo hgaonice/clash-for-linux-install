@@ -58,11 +58,10 @@ EOF
 }
 
 set_system_proxy() {
-    local mixed_port=$("$BIN_YQ" '.mixed-port // ""' "$CLASH_CONFIG_RUNTIME")
-    local http_port=$("$BIN_YQ" '.port // ""' "$CLASH_CONFIG_RUNTIME")
-    local socks_port=$("$BIN_YQ" '.socks-port // ""' "$CLASH_CONFIG_RUNTIME")
-
-    local auth=$("$BIN_YQ" '.authentication[0] // ""' "$CLASH_CONFIG_RUNTIME")
+    local mixed_port http_port socks_port auth
+    IFS='|' read -r mixed_port http_port socks_port auth < <(
+        "$BIN_YQ" '[.mixed-port // "", .port // "", .socks-port // "", .authentication[0] // ""] | join("|")' "$CLASH_CONFIG_RUNTIME"
+    )
     [ -n "$auth" ] && auth=$auth@
 
     local bind_addr=$(_get_bind_addr)

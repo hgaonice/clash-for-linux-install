@@ -13,7 +13,7 @@ clashsecret() {
         _okcat "Web 访问密钥：$(_get_secret)"
         ;;
     1)
-        "$BIN_YQ" -i ".secret = \"$1\"" "$CLASH_CONFIG_MIXIN" || {
+        SECRET=$1 "$BIN_YQ" -i '.secret = env(SECRET)' "$CLASH_CONFIG_MIXIN" || {
             _failcat "密钥更新失败，请重新输入"
             return 1
         }

@@ -3,7 +3,7 @@
 clashui() {
     _detect_ext_addr
     service_is_active >&/dev/null || service_start >/dev/null
-    service_is_active >&/dev/null || _error_quit "无法启动服务，请检查日志"
+    service_is_active >&/dev/null || _errorcat "无法启动服务，请检查日志" || return
 
     local query_url='https://api64.ipify.org'
     local public_ip

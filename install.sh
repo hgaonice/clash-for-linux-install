@@ -23,5 +23,5 @@ clashsecret
 _valid_config "$CLASH_CONFIG_BASE" && {
     CLASHCTL_SUB_URL="file://$CLASH_CONFIG_BASE"
 }
-clashsub add --use "$CLASHCTL_SUB_URL" && clashon
-exec $SHELL
+clashsub add --use "$CLASHCTL_SUB_URL"
+_okcat '🎉' "请执行 source ~/.bashrc 为当前 SHELL 加载 clashctl 命令"

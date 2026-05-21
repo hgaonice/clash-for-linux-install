@@ -71,7 +71,7 @@ _detect_subconverter_port() {
     BIN_SUBCONVERTER_PORT=$("$BIN_YQ" '.server.port' "$BIN_SUBCONVERTER_CONFIG")
     _is_port_used "$BIN_SUBCONVERTER_PORT" && {
         local new_port
-        new_port=$(_get_random_port)
+        new_port=$(_get_random_port) || return
         _failcat '🎯' "端口冲突：[subconverter] ${BIN_SUBCONVERTER_PORT} 🎲 随机分配：$new_port"
         BIN_SUBCONVERTER_PORT=$new_port
         "$BIN_YQ" -i ".server.port = $new_port" "$BIN_SUBCONVERTER_CONFIG" 2>/dev/null
@@ -89,12 +89,15 @@ _start_convert() {
     local start now
     start=$(date +%s)
     while ! curl --silent --fail "$check_url" >/dev/null 2>&1; do
-        sleep 0.5
+        sleep 0.2
         now=$(date +%s)
-        [ $((now - start)) -gt 2 ] && _error_quit "订阅转换服务未启动，请检查日志：$BIN_SUBCONVERTER_LOG"
+        [ $((now - start)) -gt 10 ] && { _errorcat "订阅转换服务未启动，请检查日志：$BIN_SUBCONVERTER_LOG"; return 1; }
     done
 }
 
 _stop_convert() {
-    pkill -9 -f "$BIN_SUBCONVERTER" >/dev/null 2>&1
+    pkill -TERM -x subconverter 2>/dev/null
+    sleep 0.2
+    pkill -KILL -x subconverter 2>/dev/null
+    return 0
 }

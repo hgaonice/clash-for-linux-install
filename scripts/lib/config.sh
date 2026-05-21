@@ -2,8 +2,9 @@
 
 _get_bind_addr() {
   local allow_lan bind_addr
-  bind_addr=$("$BIN_YQ" '.bind-address // "*"' "$CLASH_CONFIG_RUNTIME")
-  allow_lan=$("$BIN_YQ" '.allow-lan // false' "$CLASH_CONFIG_RUNTIME")
+  IFS='|' read -r bind_addr allow_lan < <(
+    "$BIN_YQ" '[.bind-address // "*", .allow-lan // false] | join("|")' "$CLASH_CONFIG_RUNTIME"
+  )
 
   case $allow_lan in
   true)
@@ -18,9 +19,9 @@ _get_bind_addr() {
 
 _detect_proxy_port() {
   local mixed_port http_port socks_port
-  mixed_port=$("$BIN_YQ" '.mixed-port // ""' "$CLASH_CONFIG_RUNTIME")
-  http_port=$("$BIN_YQ" '.port // ""' "$CLASH_CONFIG_RUNTIME")
-  socks_port=$("$BIN_YQ" '.socks-port // ""' "$CLASH_CONFIG_RUNTIME")
+  IFS='|' read -r mixed_port http_port socks_port < <(
+    "$BIN_YQ" '[.mixed-port // "", .port // "", .socks-port // ""] | join("|")' "$CLASH_CONFIG_RUNTIME"
+  )
 
   [ -z "$mixed_port" ] && [ -z "$http_port" ] && [ -z "$socks_port" ] && mixed_port=7890
 
@@ -40,7 +41,7 @@ _detect_proxy_port() {
     port=${entry#*:}
 
     [ -n "$port" ] && _is_port_used "$port" && [ "$service_active" != "true" ] && {
-      new_port=$(_get_random_port)
+      new_port=$(_get_random_port) || return
       count=$((count + 1))
       _failcat '🎯' "端口冲突：[$yaml_key] $port 🎲 随机分配 $new_port"
       "$BIN_YQ" -i ".${yaml_key} = $new_port" "$CLASH_CONFIG_MIXIN"
@@ -61,16 +62,15 @@ _detect_ext_addr() {
   EXT_PORT=$ext_port
   [ "$ext_ip" = '0.0.0.0' ] && EXT_IP=$(_get_local_ip)
 
-  _is_port_used "$EXT_PORT" && {
-    for pid in $(pgrep -f "$BIN_KERNEL"); do
-      [ -z "$pid" ] && continue
-      _is_port_used "$pid" && return 0
-    done
+  local service_active=false
+  service_is_active >&/dev/null && service_active=true
+
+  _is_port_used "$EXT_PORT" && [ "$service_active" != "true" ] && {
     local new_port
-    new_port=$(_get_random_port)
+    new_port=$(_get_random_port) || return
     _failcat '🎯' "端口冲突：[external-controller] ${EXT_PORT} 🎲 随机分配 $new_port"
     EXT_PORT=$new_port
-    "$BIN_YQ" -i ".external-controller = \"$ext_ip:$new_port\"" "$CLASH_CONFIG_MIXIN"
+    EXT_ADDR="$ext_ip:$new_port" "$BIN_YQ" -i '.external-controller = env(EXT_ADDR)' "$CLASH_CONFIG_MIXIN"
     _merge_config
   }
 }
@@ -83,14 +83,16 @@ _valid_config() {
   local config="$1"
   [[ ! -e "$config" || "$(wc -l <"$config")" -lt 1 ]] && return 1
 
-  local test_cmd test_log
-  test_cmd=("$BIN_KERNEL" -d "$(dirname "$config")" -f "$config" -t)
-  test_log=$("${test_cmd[@]}") || {
-    "${test_cmd[@]}"
+  local test_log
+  test_log=$("$BIN_KERNEL" -d "$(dirname "$config")" -f "$config" -t 2>&1) || {
+    printf '%s\n' "$test_log" >&2
     grep -qs "unsupport proxy type" <<<"$test_log" && {
       local prefix="检测到订阅中包含不受支持的代理协议"
-      [ "$CLASHCTL_KERNEL" = "clash" ] && _error_quit "${prefix}, 推荐安装使用 mihomo 内核"
-      _error_quit "${prefix}, 请检查并升级内核版本"
+      if [ "$CLASHCTL_KERNEL" = "clash" ]; then
+        _errorcat "${prefix}, 推荐安装使用 mihomo 内核"
+      else
+        _errorcat "${prefix}, 请检查并升级内核版本"
+      fi
     }
     return 1
   }
@@ -171,7 +173,7 @@ _merge_config() {
 
   _valid_config "$CLASH_CONFIG_RUNTIME" || {
     cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
-    _error_quit "验证失败：请检查 Mixin 配置"
+    _errorcat "验证失败：请检查 Mixin 配置"
   }
 }
 tunstatus() {
@@ -189,7 +191,7 @@ _merge_config_restart() {
   _merge_config
   service_stop >&/dev/null
   service_is_active >&/dev/null && tunstatus >&/dev/null && {
-    service_sudo_stop || _error_quit "请先关闭 Tun 模式"
+    service_sudo_stop || _errorcat "请先关闭 Tun 模式" || return
   }
   sleep 0.1
   service_start >/dev/null
