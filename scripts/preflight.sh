@@ -284,7 +284,14 @@ EOF
 
     [ -n "$SHELL_RC_FISH" ] && {
         mkdir -p -- "$(dirname -- "$SHELL_RC_FISH")"
-        /usr/bin/install -m 0644 "$CLASHCTL_CMD_DIR/clashctl.fish" "$SHELL_RC_FISH"
+        local fish_quoted=${CLASHCTL_HOME//\\/\\\\}
+        fish_quoted=${fish_quoted//\'/\\\'}
+        {
+            printf "# clashctl shell-rc (managed by install.sh, do not edit)\n"
+            printf "set -gx CLASHCTL_HOME '%s'\n\n" "$fish_quoted"
+            cat -- "$CLASHCTL_CMD_DIR/clashctl.fish"
+        } >"$SHELL_RC_FISH"
+        chmod 0644 -- "$SHELL_RC_FISH"
         written+=("$SHELL_RC_FISH")
     }
 

@@ -81,3 +81,14 @@ set_system_proxy() {
     export no_proxy=$no_proxy_addr
     export NO_PROXY=$no_proxy
 }
+
+_dump_proxy_env_fish() {
+    local v val
+    for v in http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY; do
+        val=${!v}
+        [ -z "$val" ] && continue
+        val=${val//\\/\\\\}
+        val=${val//\'/\\\'}
+        printf "set -gx %s '%s'\n" "$v" "$val"
+    done
+}
